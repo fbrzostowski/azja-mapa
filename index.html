@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Azja Mapa</title>
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"
+  />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, sans-serif;
+    }
+
+    #map {
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* panel wyszukiwarki – wyśrodkowany na górze */
+    #search-panel {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 8px 10px;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    #search-input {
+      padding: 4px 6px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      min-width: 220px;
+    }
+
+    .btn {
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #eee;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: #ddd;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    /* info pod panelem – też na środku */
+    #search-info {
+      position: absolute;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      max-width: 360px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+<div id="search-panel">
+  <input
+    id="search-input"
+    type="text"
+    placeholder="Szukaj miejsca (np. Himalaje)..."
+  />
+  <button id="search-button" class="btn">Szukaj</button>
+  <button id="random-button" class="btn">Wylosuj miejsce</button>
+  <button id="show-answer-button" class="btn" disabled>Pokaż odpowiedź</button>
+</div>
+<div id="search-info"></div>
+
+<div id="map"></div>
+
+<script>
+  // start mapy – środek Azji
+  const map = L.map("map").setView([34.0479, 100.6197], 3);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  const infoBox = document.getElementById("search-info");
+
+  // słowniki i lista do wyszukiwarki + quizu
+  const markersByKey = {};       // key (lowercase) -> marker
+  const displayNameByKey = {};   // key -> nazwa oryginalna
+  const allKeys = [];            // lista wszystkich key
+  let currentRandomKey = null;   // wylosowane miejsce (key)
+
+  // wczytanie GeoJSON z miejscami
+  fetch("assets/markers.geojson")
+    .then(res => {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    })
+    .then(data => {
+      const layer = L.geoJSON(data, {
+        onEachFeature: (feature, layer) => {
+          const name = feature.properties?.name || "Miejsce";
+          const key = name.toLowerCase();
+
+          layer.bindPopup(name);
+
+          markersByKey[key] = layer;
+          displayNameByKey[key] = name;
+          allKeys.push(key);
+        }
+      }).addTo(map);
+
+      try {
+        map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+      } catch (e) {
+        console.warn("Brak obiektów do dopasowania", e);
+      }
+
+      infoBox.textContent = "Wpisz nazwę miejsca lub wylosuj je i spróbuj je odnaleźć na mapie.";
+    })
+    .catch(err => {
+      console.error("Błąd ładowania markers.geojson:", err);
+      infoBox.textContent = "Nie udało się wczytać danych z markers.geojson";
+    });
+
+  // ---- WYSZUKIWARKA ----
+  function searchPlace() {
+    const input = document.getElementById("search-input");
+    const queryRaw = input.value.trim();
+    if (!queryRaw) {
+      infoBox.textContent = "Wpisz nazwę miejsca, np. \"Himalaje\".";
+      return;
+    }
+
+    const query = queryRaw.toLowerCase();
+
+    // dokładne trafienie
+    if (markersByKey[query]) {
+      const marker = markersByKey[query];
+      const latlng = marker.getLatLng();
+      map.setView(latlng, 5);
+      marker.openPopup();
+      infoBox.textContent = "Znaleziono: " + displayNameByKey[query];
+      return;
+    }
+
+    // częściowe dopasowanie
+    const candidates = Object.keys(markersByKey).filter(name =>
+      name.includes(query)
+    );
+
+    if (candidates.length === 0) {
+      infoBox.textContent = "Nie znaleziono miejsca: " + queryRaw;
+      return;
+    }
+
+    if (candidates.length === 1) {
+      const key = candidates[0];
+      const marker = markersByKey[key];
+      const latlng = marker.getLatLng();
+      map.setView(latlng, 5);
+      marker.openPopup();
+      infoBox.textContent = "Znaleziono: " + displayNameByKey[key];
+      return;
+    }
+
+    // kilka wyników – lista
+    infoBox.textContent =
+      "Znaleziono kilka miejsc: " +
+      candidates.map(k => displayNameByKey[k]).join(", ");
+  }
+
+  // ---- QUIZ: LOSOWANIE MIEJSCA ----
+  function pickRandomPlace() {
+    if (allKeys.length === 0) {
+      infoBox.textContent = "Dane jeszcze się nie wczytały – spróbuj za chwilę.";
+      return;
+    }
+
+    const idx = Math.floor(Math.random() * allKeys.length);
+    currentRandomKey = allKeys[idx];
+
+    const name = displayNameByKey[currentRandomKey];
+
+    infoBox.textContent =
+      "Wylosowane miejsce: \"" +
+      name +
+      "\". Spróbuj samodzielnie odnaleźć je na mapie. Kiedy będziesz gotowy, kliknij \"Pokaż odpowiedź\".";
+
+    // aktywuj przycisk pokazania odpowiedzi
+    document.getElementById("show-answer-button").disabled = false;
+  }
+
+  function showRandomAnswer() {
+    if (!currentRandomKey || !markersByKey[currentRandomKey]) {
+      infoBox.textContent = "Najpierw wylosuj miejsce przyciskiem \"Wylosuj miejsce\".";
+      return;
+    }
+
+    const marker = markersByKey[currentRandomKey];
+    const latlng = marker.getLatLng();
+    map.setView(latlng, 5);
+    marker.openPopup();
+
+    const name = displayNameByKey[currentRandomKey];
+    infoBox.textContent =
+      "To tutaj jest: \"" + name + "\". Możesz wylosować kolejne miejsce i spróbować jeszcze raz.";
+  }
+
+  // obsługa przycisków
+  document.getElementById("search-button").addEventListener("click", searchPlace);
+  document.getElementById("random-button").addEventListener("click", pickRandomPlace);
+  document.getElementById("show-answer-button").addEventListener("click", showRandomAnswer);
+
+  // enter w polu tekstowym
+  document
+    .getElementById("search-input")
+    .addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        searchPlace();
+      }
+    });
+</script>
+
+</body>
+</html>
+
